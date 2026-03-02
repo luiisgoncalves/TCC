@@ -1,0 +1,23 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<DownloadTask>
+  <ProjectInfo
+    DeviceVersion="17.0.0.0"
+    CreationTime="2025-04-03 18:18:14 (UTC)"
+    Runtime="COLORADO"
+    RtProjectName="MSPlanta_v2.2.HMI_2[TP1500 Comfort]"
+    RtProjectFolderName="MSPlanta_v2.2.HMI_2[TP1500 Comfort]"
+    DeviceType="TP1500 Comfort"
+    DisplayOrientation="0"
+    RTReleaseNo="17.0.0.7"
+    ImageReleaseNo="17.0.0.7"
+    RTCV="17.0.0.0"
+    PRCV="17.0.0.0"
+    FirmwareFileName="CP_15_19_22\17.0.0.7\CP_15_19_22_V17_0.fwf"
+    RuntimeFileName="CP_15_19_22\17.0.0.7\CP_15_19_22_V17_0.ruf"
+    RuntimeAddonFolderName="CP_15_19_22" />
+  <FullDownload>pdata.fwc</FullDownload>
+  <FullDownload
+    type="ADMINDATA">pdata.pwx</FullDownload>
+  <FullDownload>ProjectSettings.hsf</FullDownload>
+  <FullDownload>DeviceSettings.hsf</FullDownload>
+</DownloadTask>
