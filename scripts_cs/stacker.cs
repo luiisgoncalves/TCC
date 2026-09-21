@@ -1,43 +1,67 @@
-//// DIGITAL OUTPUTS ////
-const string DO_Frente = "Frente";
-const string DO_Tras = "Tras";
-const string DO_Sobe = "Sobe";
-const string DO_Desce = "Desce";
-const string DO_Estender = "Estender";
-const string DO_Retrair = "Retrair";
-//// DIGITAL INPUTS ////
-const string DI_LimSwitch0 = "LimSwitch0";
-const string DI_LimSwitch1 = "LimSwitch1";
-const string DI_LimSwitch2 = "LimSwitch2";
-const string DI_LimSwitch3 = "LimSwitch3";
-const string DI_Enconder0 = "Enconder0";
-const string DI_Enconder1 = "Enconder1";
-const string DI_Enconder2 = "Enconder2";
-const string DI_Estendido = "Estendido";
-const string DI_Recuado = "Recuado";
+// =============================================================================
+//  stacker.cs  --  Script do UDC do subsistema de armazenamento
+// -----------------------------------------------------------------------------
+//  A torre movel percorre dois eixos acionados por motor e carrega um garfo
+//  pneumatico que insere e retira os cubos das prateleiras.
+//
+//  Diferenca em relacao ao braco e a prensa: os eixos NAO sao animados ate uma
+//  posicao predefinida. A cada ciclo a rotina le a posicao atual e aplica um
+//  pequeno incremento na direcao comandada, de modo que o deslocamento
+//  prossegue enquanto o comando estiver ativo e cessa assim que ele e retirado
+//  -- o comportamento de um motor, e nao o de um cilindro.
+//
+//  Fotocelulas (os nomes dos componentes internos nao foram alterados):
+//    Photocell00 -> AtLoadPosition, posicao de recebimento do cubo vindo do braco
+//    Photocell01 -> EncoderH, pulsos do eixo horizontal
+//    Photocell02 -> EncoderV, pulsos do eixo vertical
+//  Como no braco, o componente apenas gera os pulsos; a contagem cabe ao CLP.
+//
+//  Atencao: o campo Description da interface do UDC aceita no maximo 10
+//  caracteres, entao alguns nomes ficam truncados ("MoveForwar", "LimitForwa",
+//  "AtLoadPosi"). As strings abaixo precisam bater exatamente com o que esta
+//  declarado no componente, truncamento incluido.
+// =============================================================================
 
-const float homeMasterRod = 4f;
+//// DIGITAL OUTPUTS ////  (comandos que o CLP envia ao componente)
+const string DO_MoveForward = "MoveForwar";
+const string DO_MoveBack = "MoveBack";
+const string DO_MoveUp = "MoveUp";
+const string DO_MoveDown = "MoveDown";
+const string DO_Extend = "Extend";
+const string DO_Retract = "Retract";
 
+//// DIGITAL INPUTS ////  (retornos que o componente envia ao CLP)
+const string DI_LimitBack = "LimitBack";   // limite do movimento para tras
+const string DI_LimitForward = "LimitForwa";   // limite do movimento para frente
+const string DI_LimitDown = "LimitDown";   // limite do movimento para baixo
+const string DI_LimitUp = "LimitUp";   // limite do movimento para cima
+const string DI_AtLoadPosition = "AtLoadPosi";     // posicao de recebimento do cubo
+const string DI_EncoderH = "EncoderH";     // pulsos do eixo horizontal
+const string DI_EncoderV = "EncoderV";     // pulsos do eixo vertical
+const string DI_Extended = "Extended";
+const string DI_Retracted = "Retracted";
+
+// Posicoes extremas do garfo pneumatico
 const float retracted = 0.5f;
 const float extended = 1.2f;
 
+// Incremento aplicado a cada ciclo em cada direcao. O sinal define o sentido.
 const float frente = -0.01f;
 const float tras = 0.01f;
 const float sobe = 0.01f;
 const float desce = -0.01f;
 
-const float speedZ = 0.2f;
-const float speedY = 0.2f;
-const float speedPiston = 0.5f;
+const float speedZ = 0.2f;        // velocidade do eixo horizontal
+const float speedY = 0.2f;        // velocidade do eixo vertical
+const float speedPiston = 0.5f;   // velocidade do garfo
 
-const string X = "X";
-const string Y = "Y";
-const string Z = "Z";
+const string Y = "Y";   // eixo vertical
+const string Z = "Z";   // eixo horizontal
 
-bool inHome;
 bool condHook;
-string msg;
 
+// Estado da verificacao de esforco em cada fim de curso: o instante em que a
+// chave foi atingida e o travamento que impede o efeito de reaparecer.
 DateTime timeLS00 = DateTime.MinValue;
 DateTime timeLS01 = DateTime.MinValue;
 DateTime timeLS02 = DateTime.MinValue;
@@ -46,58 +70,60 @@ bool condSw00;
 bool condSw01;
 bool condSw02;
 bool condSw03;
-int cont = 0;
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////
 
 public void Init()
 {
-	
+
 }
 
 public void Main()
 {
-	///////////////////////////////////////////////////////////////////////////////////////////////
-	
-	UC.SetInput(DI_LimSwitch0, LimitSwitch00.Status);
-	UC.SetInput(DI_LimSwitch1, LimitSwitch01.Status);
-	UC.SetInput(DI_LimSwitch2, LimitSwitch02.Status);
-	UC.SetInput(DI_LimSwitch3, LimitSwitch03.Status);
-	
-	UC.SetInput(DI_Enconder0, Photocell00.Status);
-	UC.SetInput(DI_Enconder1, Photocell01.Status);
-	UC.SetInput(DI_Enconder2, Photocell02.Status);
-	
-	
-	///////////////////////////////////////////////////////////////////////////////////////////////
-	
-	LimitSwitchStress(UC.GetOutput(DO_Tras),ref condSw00,ref timeLS00,LimitSwitch00,SmokeFX00);
-	LimitSwitchStress(UC.GetOutput(DO_Frente),ref condSw01,ref timeLS01,LimitSwitch01,SmokeFX01);
-	LimitSwitchStress(UC.GetOutput(DO_Desce),ref condSw02,ref timeLS02,LimitSwitch02,SmokeFX02);
-	LimitSwitchStress(UC.GetOutput(DO_Sobe),ref condSw03,ref timeLS03,LimitSwitch03,SmokeFX03);
-	
-	///////////////////////////////////////////////////////////////////////////////////////////////
-	
-	inHome = MasterRod.CurrPos()[2] > homeMasterRod && Photocell00.Status;
+	// --- Retornos ao CLP -----------------------------------------------------
+
+	UC.SetInput(DI_LimitBack, LimitSwitch00.Status);
+	UC.SetInput(DI_LimitForward, LimitSwitch01.Status);
+	UC.SetInput(DI_LimitDown, LimitSwitch02.Status);
+	UC.SetInput(DI_LimitUp, LimitSwitch03.Status);
+
+	UC.SetInput(DI_AtLoadPosition, Photocell00.Status);
+	UC.SetInput(DI_EncoderH, Photocell01.Status);
+	UC.SetInput(DI_EncoderV, Photocell02.Status);
+
+
+	// --- Esforco desnecessario sobre os fins de curso ------------------------
+	// Cada chave tem o seu proprio efeito, de modo que se identifica qual dos
+	// quatro limites foi forcado.
+
+	LimitSwitchStress(UC.GetOutput(DO_MoveBack),ref condSw00,ref timeLS00,LimitSwitch00,SmokeFX00);
+	LimitSwitchStress(UC.GetOutput(DO_MoveForward),ref condSw01,ref timeLS01,LimitSwitch01,SmokeFX01);
+	LimitSwitchStress(UC.GetOutput(DO_MoveDown),ref condSw02,ref timeLS02,LimitSwitch02,SmokeFX02);
+	LimitSwitchStress(UC.GetOutput(DO_MoveUp),ref condSw03,ref timeLS03,LimitSwitch03,SmokeFX03);
+
+	// --- Garfo ---------------------------------------------------------------
+	// O cubo fica preso ao garfo enquanto ele estiver parado ou enquanto a
+	// fotocelula do eixo vertical estiver acionada.
+
 	condHook = !Piston.IsMoving || Photocell02.Status;
-	
-	EditorUtils.ShowText(condHook.ToString());
+
 	if(Piston.CurrPos()[2] == retracted)
 	{
-		UC.SetInput(DI_Recuado, true);
-		UC.SetInput(DI_Estendido, false);
+		UC.SetInput(DI_Retracted, true);
+		UC.SetInput(DI_Extended, false);
 	}
 	else if(Piston.CurrPos()[2] == extended)
 	{
-		UC.SetInput(DI_Recuado, false);
-		UC.SetInput(DI_Estendido, true);
+		UC.SetInput(DI_Retracted, false);
+		UC.SetInput(DI_Extended, true);
 	}
 	else
 	{
-		UC.SetInput(DI_Recuado, false);
-		UC.SetInput(DI_Estendido, false);
+		// Em curso: nenhum dos dois sinais ativo
+		UC.SetInput(DI_Retracted, false);
+		UC.SetInput(DI_Extended, false);
 	}
-	
+
 	if(condHook)
 	{
 		Hook.Pick(true);
@@ -106,97 +132,43 @@ public void Main()
 	{
 		Hook.Pick(false);
 	}
-	
-	if(UC.GetOutput(DO_Tras) && !LimitSwitch00.Status && !UC.GetOutput(DO_Frente))
+
+	// --- Eixos ---------------------------------------------------------------
+	// Cada movimento exige o seu comando ativo, o comando oposto inativo e a
+	// chave de fim de curso correspondente livre.
+
+	if(UC.GetOutput(DO_MoveBack) && !LimitSwitch00.Status && !UC.GetOutput(DO_MoveForward))
 	{
 		MoveZ(tras);
-	} 
-	
-	if(UC.GetOutput(DO_Frente) && !LimitSwitch01.Status && !UC.GetOutput(DO_Tras))
+	}
+
+	if(UC.GetOutput(DO_MoveForward) && !LimitSwitch01.Status && !UC.GetOutput(DO_MoveBack))
 	{
 		MoveZ(frente);
 	}
-	
-	if(UC.GetOutput(DO_Desce) && !LimitSwitch02.Status && !UC.GetOutput(DO_Sobe))
+
+	if(UC.GetOutput(DO_MoveDown) && !LimitSwitch02.Status && !UC.GetOutput(DO_MoveUp))
 	{
 		MoveY(desce);
 	}
-	
-	if(UC.GetOutput(DO_Sobe) && !LimitSwitch03.Status && !UC.GetOutput(DO_Desce))
+
+	if(UC.GetOutput(DO_MoveUp) && !LimitSwitch03.Status && !UC.GetOutput(DO_MoveDown))
 	{
 		MoveY(sobe);
 	}
-	
-	if(UC.GetOutput(DO_Estender) && !UC.GetOutput(DO_Retrair))
+
+	// --- Garfo pneumatico ----------------------------------------------------
+	// Cilindro de acao simples, mas com avanco e recuo comandados
+	// explicitamente pelo programa de controle.
+
+	if(UC.GetOutput(DO_Extend) && !UC.GetOutput(DO_Retract))
 	{
 		Piston.AnimationMove(Z,speedPiston,extended);
 	}
-	
-	if(UC.GetOutput(DO_Retrair) && !UC.GetOutput(DO_Estender))
+
+	if(UC.GetOutput(DO_Retract) && !UC.GetOutput(DO_Extend))
 	{
 		Piston.AnimationMove(Z,speedPiston,retracted);
-	}
-	
-	///////////////////////////////////////////////////////////////////////////////////////////////
-	
-	if(Input.GetKeyDown(KeyCode.K))
-	{
-		UC.SetOutput(DO_Frente, true);
-	}
-	
-	if(Input.GetKeyUp(KeyCode.K))
-	{
-		UC.SetOutput(DO_Frente, false);
-	}
-	
-	if(Input.GetKeyDown(KeyCode.L))
-	{
-		UC.SetOutput(DO_Tras, true);
-	}
-	
-	if(Input.GetKeyUp(KeyCode.L))
-	{
-		UC.SetOutput(DO_Tras, false);
-	}
-	
-	if(Input.GetKeyDown(KeyCode.O))
-	{
-		UC.SetOutput(DO_Sobe, true);
-	}
-	
-	if(Input.GetKeyUp(KeyCode.O))
-	{
-		UC.SetOutput(DO_Sobe, false);
-	}
-	
-	if(Input.GetKeyDown(KeyCode.I))
-	{
-		UC.SetOutput(DO_Desce, true);
-	}
-	
-	if(Input.GetKeyUp(KeyCode.I))
-	{
-		UC.SetOutput(DO_Desce, false);
-	}
-	
-	if(Input.GetKeyDown(KeyCode.E))
-	{
-		UC.SetOutput(DO_Estender, true);
-	}
-	
-	if(Input.GetKeyUp(KeyCode.E))
-	{
-		UC.SetOutput(DO_Estender, false);
-	}
-	
-	if(Input.GetKeyDown(KeyCode.R))
-	{
-		UC.SetOutput(DO_Retrair, true);
-	}
-	
-	if(Input.GetKeyUp(KeyCode.R))
-	{
-		UC.SetOutput(DO_Retrair, false);
 	}
 }
 
@@ -207,14 +179,24 @@ public void Physics()
 
 public void Finish()
 {
- 
+
 }
 
+// -----------------------------------------------------------------------------
+//  MoveZ / MoveY -- deslocamento incremental dos eixos.
+//
+//  Le a posicao atual do conjunto e aplica um incremento na direcao comandada.
+//  E o que reproduz o motor: o eixo anda enquanto o comando existir e para onde
+//  estiver quando ele cessar.
+//
+//  MoveZ desloca o MasterRod, que e o conjunto pai e carrega toda a torre.
+//  MoveY desloca apenas o Cylinder, o carro vertical.
+// -----------------------------------------------------------------------------
 public void MoveZ(float direc)
 {
 	float posZ;
 	float newPosZ;
-	
+
 	posZ = MasterRod.CurrPos()[2];
 	newPosZ = posZ + direc;
 	MasterRod.AnimationMove(Z,speedZ,newPosZ);
@@ -224,12 +206,20 @@ public void MoveY(float direc)
 {
 	float posY;
 	float newPosY;
-	
+
 	posY = Cylinder.CurrPos()[1];
 	newPosY = posY + direc;
 	Cylinder.AnimationMove(Y,speedY,newPosY);
 }
 
+// -----------------------------------------------------------------------------
+//  LimitSwitchStress -- efeito de esforco sobre um fim de curso.
+//
+//  Enquanto a chave nao esta acionada, o instante de referencia e atualizado a
+//  cada ciclo. Assim que ela e atingida o relogio passa a correr: se o comando
+//  de deslocamento permanecer ativo por mais de um segundo, o efeito aparece.
+//  'cond' impede que ele seja reacionado sem que a chave seja liberada antes.
+// -----------------------------------------------------------------------------
 public void LimitSwitchStress(bool output,ref bool cond,ref DateTime condition,MechanicSw SW,SmokeFX FX)
 {
 	if(SW.Status)
@@ -252,5 +242,5 @@ public void LimitSwitchStress(bool output,ref bool cond,ref DateTime condition,M
 	{
 		condition = DateTime.Now;
 	}
-	
+
 }
